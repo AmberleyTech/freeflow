@@ -71,6 +71,49 @@ The page refreshes itself every minute.
    that `~/Library/Application Support/FreeFlow/PipelineHistory.sqlite`
    exists (the "FreeFlow Dev" bundle variant is detected automatically).
 
+## Opening stats like a "real app"
+
+`make install` also builds **FreeFlow Stats.app** — a tiny WebKit wrapper
+around the stats page — into `~/Applications`. With that you can:
+
+- **Dock**: drag `FreeFlow Stats` from `~/Applications` onto the Dock.
+- **Spotlight**: press Cmd-Space, type "FreeFlow Stats", hit Return.
+- **Keyboard shortcut**: open the Shortcuts app, create a shortcut with a
+  single "Open App" action targeting FreeFlow Stats, then use
+  "Add Keyboard Shortcut" in its details (e.g. Ctrl-Option-Cmd-S).
+
+The app refreshes stats on launch, shows the page, and quits entirely when
+you close the window. Honest RAM note: the 0 MB-idle / <10 MB budget covers
+the always-on collector. The viewer uses WebKit like any browser window
+(tens of MB) but only while it is open; if you prefer the strictest
+footprint, keep using `stats.html` in your existing browser and skip the app.
+
+## The Stats tab inside FreeFlow
+
+This fork additionally adds a **Stats** section to FreeFlow's own Settings
+sidebar (and a Stats item in the menu-bar dropdown) showing the same
+aggregates with an "Open Full Stats Page" button. Because that lives inside
+the FreeFlow binary, it only appears when you run a build of this fork
+instead of the released DMG:
+
+```bash
+cd ~/Desktop/freeflow        # your clone of the fork
+make ARCH="$(uname -m)" CODESIGN_IDENTITY=-
+open build/FreeFlow.app
+```
+
+Two things to know about the fork build:
+
+- macOS treats the locally built app as a different program, so it will ask
+  again for Microphone / Accessibility / Screen Recording permission.
+- The fork's in-app updater reads releases from your fork
+  (amberleytech/freeflow), not upstream — an upstream release would
+  silently remove the Stats tab. Until you publish signed fork releases,
+  update manually: `git remote add upstream https://github.com/zachlatta/freeflow`
+  (once), then `git fetch upstream && git merge upstream/main` and rebuild.
+  The fork touches only four small spots in FreeFlow, so merges are
+  normally clean. The sidecar and your stats data are unaffected either way.
+
 Remove with `make uninstall` (the agent and plist are removed; your stats
 stay until you delete `~/Library/Application Support/FreeFlowStats`).
 
