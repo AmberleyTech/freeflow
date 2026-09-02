@@ -56,6 +56,21 @@ transcription. View your stats any time:
 or open `~/Library/Application Support/FreeFlowStats/stats.html` directly.
 The page refreshes itself every minute.
 
+### Checking that everything is running properly
+
+1. `make check` printed `PASS: 4221 checks, 0 failures`, and
+   `make memcheck` / `make diskcheck` printed `PASS` with numbers well under
+   their budgets.
+2. The agent is loaded: `launchctl list | grep freeflowstats` shows
+   `com.freeflowstats.agent`.
+3. Dictate something in FreeFlow, wait a few seconds, then run
+   `freeflow-stats --summary` — transcriptions and words should have
+   increased (or run without arguments to ingest immediately).
+4. The page footer says "Watching FreeFlow history". If it says the history
+   source is unavailable, confirm FreeFlow has transcribed at least once and
+   that `~/Library/Application Support/FreeFlow/PipelineHistory.sqlite`
+   exists (the "FreeFlow Dev" bundle variant is detected automatically).
+
 Remove with `make uninstall` (the agent and plist are removed; your stats
 stay until you delete `~/Library/Application Support/FreeFlowStats`).
 
