@@ -1,0 +1,14 @@
+{
+  "name": "FreeFlow",
+  "install": "sudo apt-get update && sudo apt-get install -y ruby",
+  "terminals": [
+    {
+      "name": "website",
+      "command": "cd website && python3 -m http.server 8000",
+      "description": "Serves the FreeFlow static landing page (website/) at http://localhost:8000 for local preview."
+    }
+  ],
+  "ports": [
+    { "name": "website", "port": 8000 }
+  ]
+}
