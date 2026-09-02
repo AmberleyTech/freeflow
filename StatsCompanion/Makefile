@@ -58,7 +58,9 @@ install: $(BIN)
 ifeq ($(UNAME_S),Darwin)
 	@mkdir -p "$(DATA_DIR)/bin" "$(AGENT_DIR)"
 	cp "$(BIN)" "$(DATA_DIR)/bin/freeflow-stats"
-	sed "s|__BINARY__|$(DATA_DIR)/bin/freeflow-stats|g" $(AGENT_ID).plist > "$(AGENT_DIR)/$(AGENT_ID).plist"
+	sed -e "s|__BINARY__|$(DATA_DIR)/bin/freeflow-stats|g" \
+	    -e "s|__HOME__|$(HOME)|g" \
+	    $(AGENT_ID).plist > "$(AGENT_DIR)/$(AGENT_ID).plist"
 	-launchctl bootout gui/$(shell id -u)/$(AGENT_ID) 2>/dev/null
 	launchctl bootstrap gui/$(shell id -u) "$(AGENT_DIR)/$(AGENT_ID).plist"
 	@echo "Installed. The agent now watches FreeFlow's history database."
