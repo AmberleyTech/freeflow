@@ -8,7 +8,36 @@ It is a **sidecar**: FreeFlow itself stays 100% upstream and untouched, its
 in-app updater keeps working, and no custom FreeFlow build or DMG is ever
 needed.
 
+## Getting the code
+
+The sidecar lives on the `Mukeshstats-sidecar-dd5d` branch of your fork. If
+the branch is on GitHub already:
+
+```bash
+git clone https://github.com/amberleytech/freeflow.git
+cd freeflow
+git checkout Mukeshstats-sidecar-dd5d
+```
+
+If you received a **git bundle** instead (e.g. the branch was never pushed),
+fetch the branch straight out of the bundle file — no GitHub access needed:
+
+```bash
+git clone https://github.com/amberleytech/freeflow.git
+cd freeflow
+git fetch /path/to/freeflow-stats-sidecar.bundle \
+    Mukeshstats-sidecar-dd5d:Mukeshstats-sidecar-dd5d
+git checkout Mukeshstats-sidecar-dd5d
+```
+
+(Or apply the patch series with `git am /path/to/ffs-patches/*.patch`.)
+
 ## Quick start (macOS 13+)
+
+Only prerequisite: the Xcode Command Line Tools (`xcode-select --install`),
+which provide `clang` and `make`. There is **no DMG and nothing to sign** —
+the sidecar is a single tiny binary you compile yourself, plus a launchd
+agent file. No other dependencies: `libsqlite3` ships with macOS.
 
 ```bash
 cd StatsCompanion
