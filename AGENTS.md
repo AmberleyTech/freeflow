@@ -115,3 +115,31 @@ A change is complete only when:
   and a documented safe path.
 - Treat workflow changes as sensitive because code executed from `main` can
   access signing and notarization secrets in the release jobs.
+
+## Cursor Cloud specific instructions
+
+Cloud Agents run on Linux (Ubuntu x86_64), so the macOS toolchain FreeFlow
+depends on is unavailable there. The following require macOS and must run
+locally or in CI (the `check` and release workflows run on `macos-15`); do not
+expect them to work on a Cloud Agent:
+
+- `make`, `make all`, `make run`, `make dmg` (needs `swiftc`, `xcrun`, the macOS
+  SDK, `codesign`, `plutil`, `sips`, `iconutil`).
+- `make check`, `make typecheck`, `make test` (Swift sources import AppKit and
+  other Apple-only frameworks and target `*-apple-macosx13.0`).
+- `make validate` as a whole (`plutil -lint` is macOS-only).
+
+What a Cloud Agent can do on Linux: edit sources, and run the cross-platform
+portions of `make validate`:
+
+```bash
+# Parse the repository shell scripts.
+for s in $(find .github/scripts .agents/skills -name '*.sh' -type f); do bash -n "$s"; done
+# Lint the workflow/config YAML (ruby is installed by the environment install step).
+ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' $(find .github -type f \( -name '*.yml' -o -name '*.yaml' \))
+```
+
+The Cloud Agent environment (`.cursor/environment.json`) installs `ruby` for the
+YAML check and serves the static landing page in `website/` at
+`http://localhost:8000` (the `website` terminal). Any Swift build or test change
+still needs a documented macOS verification before merge.
