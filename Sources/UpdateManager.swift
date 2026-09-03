@@ -167,11 +167,7 @@ final class UpdateManager: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "updateLastPostTranscriptionReminderDate") }
     }
 
-    // Fork note (amberleytech/freeflow): this build carries the Stats tab,
-    // which an upstream release would silently remove on update, so the
-    // updater reads releases from the fork. Until the fork publishes signed
-    // releases, update manually: merge upstream/main, rebuild with Make.
-    private let releasesURL = URL(string: "https://api.github.com/repos/amberleytech/freeflow/releases?per_page=100")!
+    private let releasesURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/releases?per_page=100")!
     private let stabilityBufferDays: TimeInterval = 3
     private let checkIntervalSeconds: TimeInterval = 7 * 24 * 60 * 60 // 7 days
     private let postTranscriptionReminderInterval: TimeInterval = 24 * 60 * 60 // 1 day
