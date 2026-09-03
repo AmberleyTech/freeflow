@@ -18,6 +18,7 @@ void ffs_stats_add_event(FfsStats *s, long ts, long words, double seconds) {
     if (seconds >= 0.0) {
         s->total_seconds += seconds;
         s->with_audio++;
+        s->audio_words += words;
     } else {
         s->without_audio++;
     }
@@ -73,9 +74,11 @@ recent:
 }
 
 /* ---- compact JSON: fixed key order, positional arrays, no whitespace ----
- * {"v":1,"tw":40,"tot":[c,w,sec,wa,wo],"f":..,"l":..,"wm":..,"src":1,
- *  "d":[["YYYY-MM-DD",c,w,s],...],"r":[[ts,w,s],...]}
+ * {"v":1,"tw":40,"tot":[c,w,sec,wa,wo,aw],"f":..,"l":..,"wm":..,"src":1,
+ *  "d":[["YYYY-MM-DD",c,w,s],...],"r":[[ts,w,s],...],"pks":[pk,...]}
  * Seconds print with %.3f; -1 marks unknown duration in the recent ring.
+ * "aw" is words with known audio duration; "pks" is the live-window
+ * already-counted primary-key ring (optional when loading older files).
  */
 
 int ffs_store_save(const FfsStats *s, const char *path) {
@@ -90,11 +93,11 @@ int ffs_store_save(const FfsStats *s, const char *path) {
         free(tmp);
         return -1;
     }
-    fprintf(f, "{\"v\":%d,\"tw\":%g,\"tot\":[%ld,%ld,%.3f,%ld,%ld],"
+    fprintf(f, "{\"v\":%d,\"tw\":%g,\"tot\":[%ld,%ld,%.3f,%ld,%ld,%ld],"
                "\"f\":%ld,\"l\":%ld,\"wm\":%ld,\"src\":%d,\"d\":[",
             s->version, s->typing_wpm, s->total_count, s->total_words,
-            s->total_seconds, s->with_audio, s->without_audio, s->first_ts,
-            s->last_ts, s->watermark, s->source_ok);
+            s->total_seconds, s->with_audio, s->without_audio, s->audio_words,
+            s->first_ts, s->last_ts, s->watermark, s->source_ok);
     for (int i = 0; i < s->day_count; i++) {
         const FfsDay *d = &s->days[i];
         fprintf(f, "%s[\"%s\",%ld,%ld,%.3f]", i ? "," : "", d->date, d->count,
@@ -106,6 +109,9 @@ int ffs_store_save(const FfsStats *s, const char *path) {
         fprintf(f, "%s[%ld,%ld,%.3f]", i ? "," : "", e->ts, e->words,
                 e->seconds);
     }
+    fprintf(f, "],\"pks\":[");
+    for (int i = 0; i < s->seen_pk_len; i++)
+        fprintf(f, "%s%ld", i ? "," : "", s->seen_pk[i]);
     fprintf(f, "]}");
 
     int ok = 0;
@@ -259,6 +265,13 @@ int ffs_store_load(FfsStats *s, const char *path) {
         parsed.with_audio = read_long(&c);
         expect(&c, ',');
         parsed.without_audio = read_long(&c);
+        ws(&c);
+        if (*c.p == ',') {
+            c.p++;
+            parsed.audio_words = read_long(&c);
+        } else if (parsed.without_audio == 0) {
+            parsed.audio_words = parsed.total_words;
+        }
         expect(&c, ']');
     }
     expect(&c, ',');
@@ -276,7 +289,9 @@ int ffs_store_load(FfsStats *s, const char *path) {
     expect(&c, ',');
     if (key(&c, "d")) {
         expect(&c, '[');
-        while (c.ok && expect(&c, '[')) {
+        ws(&c);
+        while (c.ok && *c.p == '[') {
+            c.p++;
             if (parsed.day_count >= FFS_MAX_DAYS) {
                 c.ok = 0;
                 break;
@@ -302,7 +317,9 @@ int ffs_store_load(FfsStats *s, const char *path) {
     expect(&c, ',');
     if (key(&c, "r")) {
         expect(&c, '[');
-        while (c.ok && expect(&c, '[')) {
+        ws(&c);
+        while (c.ok && *c.p == '[') {
+            c.p++;
             if (parsed.recent_len >= FFS_RECENT) {
                 c.ok = 0;
                 break;
@@ -322,6 +339,29 @@ int ffs_store_load(FfsStats *s, const char *path) {
                 break;
         }
         expect(&c, ']');
+    }
+    ws(&c);
+    if (*c.p == ',') {
+        c.p++;
+        if (key(&c, "pks")) {
+            expect(&c, '[');
+            ws(&c);
+            if (*c.p != ']') {
+                while (c.ok) {
+                    if (parsed.seen_pk_len >= FFS_SEEN_PKS) {
+                        c.ok = 0;
+                        break;
+                    }
+                    parsed.seen_pk[parsed.seen_pk_len++] = read_long(&c);
+                    ws(&c);
+                    if (*c.p == ',')
+                        c.p++;
+                    else
+                        break;
+                }
+            }
+            expect(&c, ']');
+        }
     }
     expect(&c, '}');
 

@@ -24,13 +24,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 static void print_summary(const FfsStats *s, long now) {
     int covered = 0;
     double recent_wpm = ffs_recent_wpm(s, &covered);
-    double all_wpm = ffs_wpm(s->total_words, s->total_seconds);
+    double all_wpm = ffs_all_time_wpm(s);
     double saved = ffs_time_saved_seconds(s);
     printf("FreeFlow Stats\n");
     printf("  streak:           %d day%s\n", ffs_streak(s, now),
@@ -53,11 +54,45 @@ static int acquire_lock(void) {
     int fd = open(path, O_CREAT | O_RDWR, 0600);
     if (fd < 0)
         return -1;
-    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-        close(fd);
-        return -2; /* another run in progress: not an error */
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+        return fd;
+    /* WatchPaths can fire on sqlite + WAL + shm together; wait briefly so
+     * the overlapping run still sees the committed row instead of exiting. */
+    for (int attempt = 0; attempt < 20; attempt++) {
+        usleep(50000);
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+            return fd;
     }
-    return fd;
+    close(fd);
+    return -2; /* another run still in progress after ~1s */
+}
+
+static int open_path(const char *path) {
+    if (!path || !path[0])
+        return -1;
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+#ifdef __APPLE__
+        execl("/usr/bin/open", "open", path, (char *)NULL);
+#else
+        execlp("xdg-open", "xdg-open", path, (char *)NULL);
+#endif
+        _exit(127);
+    }
+    int st = 0;
+    if (waitpid(pid, &st, 0) != pid)
+        return -1;
+    return (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : -1;
+}
+
+static int load_store(FfsStats *st, const char *store_path) {
+    int rc = ffs_store_load(st, store_path);
+    if (rc < 0)
+        fprintf(stderr, "freeflow-stats: refusing to overwrite a corrupt "
+                        "stats store\n");
+    return rc;
 }
 
 static int run_ingest(int open_page) {
@@ -73,7 +108,11 @@ static int run_ingest(int open_page) {
 
     FfsStats st;
     ffs_stats_init(&st);
-    ffs_store_load(&st, store_path);
+    if (load_store(&st, store_path) < 0) {
+        flock(lock, LOCK_UN);
+        close(lock);
+        return 1;
+    }
 
     long added = 0;
     int rc = ffs_ingest(&st, NULL, NULL, &added);
@@ -88,14 +127,7 @@ static int run_ingest(int open_page) {
            st.total_count, st.source_ok ? "source ok" : "source unavailable");
 
     if (open_page) {
-        char cmd[1200];
-#ifdef __APPLE__
-        snprintf(cmd, sizeof(cmd), "open \"%s\"", html_path);
-#else
-        snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" >/dev/null 2>&1 &",
-                 html_path);
-#endif
-        if (system(cmd) != 0)
+        if (open_path(html_path) != 0)
             fprintf(stderr, "could not open %s\n", html_path);
     }
 
@@ -120,7 +152,11 @@ static int set_typing_wpm(const char *arg) {
 
     FfsStats st;
     ffs_stats_init(&st);
-    ffs_store_load(&st, store_path);
+    if (load_store(&st, store_path) < 0) {
+        flock(lock, LOCK_UN);
+        close(lock);
+        return 1;
+    }
     st.typing_wpm = wpm;
     int rc = ffs_store_save(&st, store_path);
     if (rc == 0)
@@ -145,7 +181,8 @@ int main(int argc, char **argv) {
             ffs_stats_init(&st);
             char store_path[1100];
             ffs_store_path(store_path, sizeof(store_path));
-            ffs_store_load(&st, store_path);
+            if (load_store(&st, store_path) < 0)
+                return 1;
             print_summary(&st, (long)time(NULL));
             return 0;
         }
@@ -155,7 +192,8 @@ int main(int argc, char **argv) {
             char store_path[1100], html_path[1100];
             ffs_store_path(store_path, sizeof(store_path));
             ffs_html_path(html_path, sizeof(html_path));
-            ffs_store_load(&st, store_path);
+            if (load_store(&st, store_path) < 0)
+                return 1;
             return ffs_html_write(&st, html_path, (long)time(NULL)) == 0 ? 0
                                                                          : 1;
         }

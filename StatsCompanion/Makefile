@@ -8,7 +8,7 @@ CC       := clang
 endif
 CSTD     := -std=c99
 WARN     := -Wall -Wextra -Wpedantic
-OPT      := -Os -flto
+OPT      := -Os -flto -fstack-protector-strong
 CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDLIBS   += -lsqlite3
 

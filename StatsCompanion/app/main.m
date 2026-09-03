@@ -10,7 +10,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface FFSAppDelegate : NSObject <NSApplicationDelegate>
+@interface FFSAppDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @end
 
@@ -30,8 +30,14 @@
     if ([[NSFileManager defaultManager] isExecutableFileAtPath:binPath]) {
         NSTask *task = [[NSTask alloc] init];
         task.launchPath = binPath;
-        [task launch];
-        [task waitUntilExit];
+        task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+        task.standardError = [NSFileHandle fileHandleWithNullDevice];
+        @try {
+            [task launch];
+            [task waitUntilExit];
+        } @catch (NSException *e) {
+            (void)e;
+        }
     }
 
     NSRect frame = NSMakeRect(0, 0, 780, 920);
@@ -45,14 +51,18 @@
     self.window.title = @"FreeFlow Stats";
     [self.window center];
 
-    WKWebView *webView = [[WKWebView alloc] initWithFrame:frame];
+    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    config.defaultWebpagePreferences.allowsContentJavaScript = NO;
+    WKWebView *webView = [[WKWebView alloc] initWithFrame:frame
+                                            configuration:config];
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    webView.navigationDelegate = self;
     self.window.contentView = webView;
 
     if ([[NSFileManager defaultManager] fileExistsAtPath:htmlPath]) {
         NSURL *pageURL = [NSURL fileURLWithPath:htmlPath];
-        [webView loadFileURL:pageURL
-            allowingReadAccessToURL:[NSURL fileURLWithPath:supportDir]];
+        NSURL *pageDir = [pageURL URLByDeletingLastPathComponent];
+        [webView loadFileURL:pageURL allowingReadAccessToURL:pageDir];
     } else {
         [webView loadHTMLString:
                      @"<html><body style='font-family:-apple-system;"
@@ -67,6 +77,16 @@
 
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationAction:(WKNavigationAction *)action
+                    decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
+    NSURL *url = action.request.URL;
+    if (url.isFileURL)
+        handler(WKNavigationActionPolicyAllow);
+    else
+        handler(WKNavigationActionPolicyCancel);
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:

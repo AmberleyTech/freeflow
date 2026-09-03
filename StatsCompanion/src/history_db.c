@@ -44,9 +44,29 @@ static void copy_ident(char *dst, size_t n, const char *src) {
     dst[i] = 0;
 }
 
+/* Core Data identifiers are [A-Za-z_][A-Za-z0-9_]*. Reject anything else
+ * before interpolating into SQL so a crafted sqlite_master row cannot
+ * break out of quoted identifiers. */
+static int valid_ident(const char *s) {
+    if (!s || !s[0])
+        return 0;
+    unsigned char c = (unsigned char)s[0];
+    if (!(c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')))
+        return 0;
+    for (s++; *s; s++) {
+        c = (unsigned char)*s;
+        if (!(c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9')))
+            return 0;
+    }
+    return 1;
+}
+
 /* Inspect one table; fill db fields and return 1 when it looks like the
  * pipeline-history table. */
 static int probe_table(FfsDb *db, const char *table) {
+    if (!valid_ident(table))
+        return 0;
     char sql[128];
     snprintf(sql, sizeof(sql), "PRAGMA table_info(\"%s\")", table);
     sqlite3_stmt *st = NULL;
@@ -56,7 +76,7 @@ static int probe_table(FfsDb *db, const char *table) {
     char pk[64] = "", ts[64] = "", raw[64] = "", post[64] = "", audio[64] = "";
     while (sqlite3_step(st) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(st, 1);
-        if (!name)
+        if (!name || !valid_ident(name))
             continue;
         if (!pk[0] &&
             (strcmp(name, "Z_PK") == 0 || contains_ci(name, "_PK")))
@@ -96,7 +116,7 @@ static int introspect(FfsDb *db) {
     int n = 0;
     while (sqlite3_step(st) == SQLITE_ROW && n < 16) {
         const char *name = (const char *)sqlite3_column_text(st, 0);
-        if (name)
+        if (name && valid_ident(name))
             copy_ident(candidates[n++], 64, name);
     }
     sqlite3_finalize(st);
@@ -129,8 +149,34 @@ int ffs_db_open(const char *path, FfsDb **out) {
     if (!db)
         return -1;
 
-    char uri[1200];
-    snprintf(uri, sizeof(uri), "file:%s?mode=ro", path);
+    /* Percent-encode so spaces / '?' in the path cannot break the URI. */
+    char encoded[3072];
+    size_t o = 0;
+    static const char hex[] = "0123456789ABCDEF";
+    for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
+        int safe = (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                   (*p >= '0' && *p <= '9') || *p == '/' || *p == '-' ||
+                   *p == '_' || *p == '.' || *p == '~';
+        if (safe) {
+            if (o + 1 >= sizeof(encoded)) {
+                free(db);
+                return -1;
+            }
+            encoded[o++] = (char)*p;
+        } else {
+            if (o + 3 >= sizeof(encoded)) {
+                free(db);
+                return -1;
+            }
+            encoded[o++] = '%';
+            encoded[o++] = hex[*p >> 4];
+            encoded[o++] = hex[*p & 15];
+        }
+    }
+    encoded[o] = 0;
+
+    char uri[3100];
+    snprintf(uri, sizeof(uri), "file:%s?mode=ro", encoded);
     if (sqlite3_open_v2(uri, &db->db,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_URI,
                         NULL) != SQLITE_OK) {

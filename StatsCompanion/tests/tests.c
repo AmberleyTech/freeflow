@@ -123,6 +123,51 @@ static void make_wav(const char *path, unsigned sample_rate, unsigned channels,
     fclose(f);
 }
 
+/* Apple AVAudioFile inserts a FLLR pad so `data` starts ~4 KB in. The
+ * duration must come from the data-chunk size field, without loading the
+ * payload and without requiring it to sit in the first 256 bytes. */
+static void make_wav_padded(const char *path, unsigned sample_rate,
+                            unsigned channels, unsigned bits,
+                            unsigned data_size, unsigned filler) {
+    unsigned byte_rate = sample_rate * channels * bits / 8;
+    unsigned short block_align = (unsigned short)(channels * bits / 8);
+    unsigned short pcm = 1;
+    unsigned short ch16 = (unsigned short)channels;
+    unsigned short bits16 = (unsigned short)bits;
+    unsigned fmt_size = 16;
+    unsigned riff_size = 4 + (8 + 16) + (8 + filler) + 8; /* no data payload */
+
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&riff_size, 4, 1, f);
+    fwrite("WAVE", 1, 4, f);
+
+    fwrite("fmt ", 1, 4, f);
+    fwrite(&fmt_size, 4, 1, f);
+    fwrite(&pcm, 2, 1, f);
+    fwrite(&ch16, 2, 1, f);
+    fwrite(&sample_rate, 4, 1, f);
+    fwrite(&byte_rate, 4, 1, f);
+    fwrite(&block_align, 2, 1, f);
+    fwrite(&bits16, 2, 1, f);
+
+    fwrite("FLLR", 1, 4, f);
+    fwrite(&filler, 4, 1, f);
+    if (filler) {
+        unsigned char *z = calloc(1, filler);
+        if (z) {
+            fwrite(z, 1, filler, f);
+            free(z);
+        }
+    }
+
+    fwrite("data", 1, 4, f);
+    fwrite(&data_size, 4, 1, f);
+    fclose(f);
+}
+
 static void make_dir(const char *path) {
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "%s", path);
@@ -229,6 +274,7 @@ static void test_rates(void) {
     double recent = ffs_recent_wpm(&s, &covered);
     CHECK(covered == 2);
     CHECK(recent == 90.0);
+    CHECK(ffs_all_time_wpm(&s) == 90.0); /* 180 audio-words / 120s, not 230/120 */
 
     /* 230 words at 40 wpm typing = 345s; minus 120s dictated = 225s saved. */
     s.typing_wpm = 40.0;
@@ -268,6 +314,7 @@ static void test_store_roundtrip(void) {
     CHECK(back.total_count == 3);
     CHECK(back.total_words == 125);
     CHECK(back.with_audio == 2 && back.without_audio == 1);
+    CHECK(back.audio_words == 65);
     CHECK(back.total_seconds > 42.7 && back.total_seconds < 42.8);
     CHECK(back.day_count == 2);
     CHECK(strcmp(back.days[0].date, "2026-08-31") == 0);
@@ -291,6 +338,36 @@ static void test_store_roundtrip(void) {
     ffs_stats_init(&fresh);
     CHECK(ffs_store_load(&fresh, "/tmp/ffs-definitely-missing.json") == 0);
     CHECK(fresh.total_count == 0);
+
+    /* Empty arrays (fresh install / typing-WPM-only store) must round-trip. */
+    char empty_path[1100];
+    snprintf(empty_path, sizeof(empty_path), "%s/empty.json", dir);
+    FfsStats empty;
+    ffs_stats_init(&empty);
+    empty.typing_wpm = 42.0;
+    CHECK(ffs_store_save(&empty, empty_path) == 0);
+    FfsStats empty_back;
+    ffs_stats_init(&empty_back);
+    CHECK(ffs_store_load(&empty_back, empty_path) == 0);
+    CHECK(empty_back.typing_wpm == 42.0);
+    CHECK(empty_back.day_count == 0 && empty_back.recent_len == 0);
+    CHECK(empty_back.seen_pk_len == 0);
+
+    /* Legacy 5-element tot without pks still loads. */
+    char legacy_path[1100];
+    snprintf(legacy_path, sizeof(legacy_path), "%s/legacy.json", dir);
+    FILE *lf = fopen(legacy_path, "w");
+    fputs("{\"v\":1,\"tw\":40,\"tot\":[2,10,30.000,1,1],"
+          "\"f\":1,\"l\":2,\"wm\":9,\"src\":1,\"d\":[],\"r\":[]}",
+          lf);
+    fclose(lf);
+    FfsStats legacy;
+    ffs_stats_init(&legacy);
+    CHECK(ffs_store_load(&legacy, legacy_path) == 0);
+    CHECK(legacy.total_count == 2 && legacy.total_words == 10);
+    CHECK(legacy.with_audio == 1 && legacy.without_audio == 1);
+    CHECK(legacy.watermark == 9);
+    CHECK(legacy.seen_pk_len == 0);
 }
 
 static void test_day_cap_fold(void) {
@@ -318,6 +395,11 @@ static void test_wav(void) {
     double d = ffs_wav_duration(path);
     CHECK(d > 9.99 && d < 10.01);
     CHECK(ffs_wav_duration("/tmp/ffs-no-such-file.wav") < 0.0);
+
+    snprintf(path, sizeof(path), "%s/padded.wav", dir);
+    make_wav_padded(path, 16000, 1, 16, 320000, 4096);
+    d = ffs_wav_duration(path);
+    CHECK(d > 9.99 && d < 10.01);
 
     /* Truncated/garbage files fail cleanly. */
     snprintf(path, sizeof(path), "%s/b.wav", dir);
@@ -370,6 +452,7 @@ static void test_ingest_pipeline(const char *table_name) {
     CHECK(s.total_seconds > 9.9 && s.total_seconds < 10.1);
     CHECK(s.watermark == 5);
     CHECK(s.day_count == 2);
+    CHECK(s.seen_pk_len == 4);
 
     /* Re-running must not double count (watermark). */
     long again = 0;
@@ -388,6 +471,13 @@ static void test_ingest_pipeline(const char *table_name) {
     CHECK(s.total_count == 5);
     CHECK(s.total_words == 15);
     CHECK(s.watermark == 6);
+
+    CHECK(ffs_store_save(&s, store) == 0);
+    FfsStats reloaded;
+    ffs_stats_init(&reloaded);
+    CHECK(ffs_store_load(&reloaded, store) == 0);
+    CHECK(reloaded.seen_pk_len == 5);
+    CHECK(reloaded.audio_words == 4); /* only aaa.wav row had duration */
 
     /* Privacy invariant: transcript text never reaches disk. */
     CHECK(ffs_store_save(&s, store) == 0);
@@ -487,6 +577,151 @@ static void test_rebuild_detection(void) {
     CHECK(s.watermark == 2);
 }
 
+static void test_empty_then_retry(void) {
+    char dir[] = "/tmp/ffs-test-retry-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+    char db[1100], audio_dir[1100];
+    snprintf(db, sizeof(db), "%s/h.sqlite", dir);
+    snprintf(audio_dir, sizeof(audio_dir), "%s/audio", dir);
+    make_dir(audio_dir);
+
+    make_history_db(db, "ZPIPELINEHISTORYENTRY");
+    sqlite3 *sq = NULL;
+    CHECK(sqlite3_open(db, &sq) == SQLITE_OK);
+    insert_row(sq, "ZPIPELINEHISTORYENTRY", 7, mk_ts(2026, 9, 1, 9, 0), "",
+               "", NULL); /* failed first pass */
+    sqlite3_close(sq);
+
+    FfsStats s;
+    ffs_stats_init(&s);
+    long added = 0;
+    CHECK(ffs_ingest(&s, db, audio_dir, &added) == 0);
+    CHECK(added == 0);
+    CHECK(s.total_count == 0);
+    CHECK(s.watermark == 0); /* empty rows do not advance the watermark */
+    CHECK(s.seen_pk_len == 0);
+
+    CHECK(sqlite3_open(db, &sq) == SQLITE_OK);
+    sqlite3_stmt *st = NULL;
+    CHECK(sqlite3_prepare_v2(sq,
+                             "UPDATE ZPIPELINEHISTORYENTRY SET "
+                             "ZRAWTRANSCRIPT=?1, ZPOSTPROCESSEDTRANSCRIPT=?2 "
+                             "WHERE Z_PK=7",
+                             -1, &st, NULL) == SQLITE_OK);
+    sqlite3_bind_text(st, 1, "hello world", -1, SQLITE_STATIC);
+    sqlite3_bind_text(st, 2, "hello world", -1, SQLITE_STATIC);
+    CHECK(sqlite3_step(st) == SQLITE_DONE);
+    sqlite3_finalize(st);
+    sqlite3_close(sq);
+
+    added = 0;
+    CHECK(ffs_ingest(&s, db, audio_dir, &added) == 0);
+    CHECK(added == 1);
+    CHECK(s.total_count == 1);
+    CHECK(s.total_words == 2);
+    CHECK(s.watermark == 7);
+    CHECK(s.seen_pk_len == 1 && s.seen_pk[0] == 7);
+}
+
+static void test_legacy_watermark_migration(void) {
+    char dir[] = "/tmp/ffs-test-legacywm-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+    char db[1100], audio_dir[1100];
+    snprintf(db, sizeof(db), "%s/h.sqlite", dir);
+    snprintf(audio_dir, sizeof(audio_dir), "%s/audio", dir);
+    make_dir(audio_dir);
+    make_history_db(db, "ZPIPELINEHISTORYENTRY");
+    sqlite3 *sq = NULL;
+    CHECK(sqlite3_open(db, &sq) == SQLITE_OK);
+    insert_row(sq, "ZPIPELINEHISTORYENTRY", 3, mk_ts(2026, 9, 1, 9, 0),
+               "one two", "one two", NULL);
+    insert_row(sq, "ZPIPELINEHISTORYENTRY", 4, mk_ts(2026, 9, 1, 10, 0),
+               "three four", "three four", NULL);
+    sqlite3_close(sq);
+
+    FfsStats s;
+    ffs_stats_init(&s);
+    s.watermark = 4; /* old store: already counted, no pks ring */
+    long added = -1;
+    CHECK(ffs_ingest(&s, db, audio_dir, &added) == 0);
+    CHECK(added == 0);
+    CHECK(s.total_count == 0);
+    CHECK(s.seen_pk_len == 2);
+}
+
+static void test_bad_identifier(void) {
+    char dir[] = "/tmp/ffs-test-ident-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+    char db[1100], audio_dir[1100];
+    snprintf(db, sizeof(db), "%s/h.sqlite", dir);
+    snprintf(audio_dir, sizeof(audio_dir), "%s/audio", dir);
+    make_dir(audio_dir);
+
+    sqlite3 *sq = NULL;
+    CHECK(sqlite3_open(db, &sq) == SQLITE_OK);
+    sqlite3_exec(sq,
+                 "CREATE TABLE \"ZBAD-X\" (Z_PK INTEGER PRIMARY KEY, "
+                 "ZTIMESTAMP REAL, ZRAWTRANSCRIPT TEXT, "
+                 "ZPOSTPROCESSEDTRANSCRIPT TEXT)",
+                 NULL, NULL, NULL);
+    sqlite3_close(sq);
+
+    FfsStats s;
+    ffs_stats_init(&s);
+    long added = -1;
+    CHECK(ffs_ingest(&s, db, audio_dir, &added) == 0);
+    CHECK(added == 0);
+    CHECK(s.source_ok == 0); /* hyphenated name is rejected */
+
+    /* A legal table still wins when both exist. */
+    make_history_db(db, "ZPIPELINEHISTORYENTRY");
+    CHECK(sqlite3_open(db, &sq) == SQLITE_OK);
+    insert_row(sq, "ZPIPELINEHISTORYENTRY", 1, mk_ts(2026, 9, 1, 9, 0),
+               "one two", "one two", NULL);
+    sqlite3_close(sq);
+    added = 0;
+    CHECK(ffs_ingest(&s, db, audio_dir, &added) == 0);
+    CHECK(added == 1);
+    CHECK(s.source_ok == 1);
+}
+
+static void test_corrupt_not_overwritten(void) {
+    char dir[] = "/tmp/ffs-test-corrupt-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+    char path[1100];
+    snprintf(path, sizeof(path), "%s/stats.json", dir);
+
+    FfsStats s;
+    ffs_stats_init(&s);
+    ffs_stats_add_event(&s, mk_ts(2026, 9, 1, 9, 0), 40, 30.0);
+    CHECK(ffs_store_save(&s, path) == 0);
+
+    FILE *f = fopen(path, "w");
+    fputs("{\"v\":1,\"tw\":garbage", f);
+    fclose(f);
+
+    FfsStats loaded;
+    ffs_stats_init(&loaded);
+    CHECK(ffs_store_load(&loaded, path) == -1);
+    char *left = slurp(path);
+    CHECK(left != NULL);
+    if (left)
+        CHECK(strstr(left, "garbage") != NULL);
+    free(left);
+}
+
+static void test_date_add_days(void) {
+    char d[11];
+    memcpy(d, "2026-03-07", 11);
+    ffs_date_add_days(d, 1);
+    CHECK(strcmp(d, "2026-03-08") == 0);
+    ffs_date_add_days(d, -1);
+    CHECK(strcmp(d, "2026-03-07") == 0);
+    memcpy(d, "2028-02-28", 11);
+    ffs_date_add_days(d, 1);
+    CHECK(strcmp(d, "2028-02-29") == 0);
+}
+
 int ffs_run_tests(void) {
     test_word_count();
     test_streak_math();
@@ -498,6 +733,11 @@ int ffs_run_tests(void) {
     test_ingest_renamed_table();
     test_unavailable_source();
     test_rebuild_detection();
+    test_empty_then_retry();
+    test_legacy_watermark_migration();
+    test_bad_identifier();
+    test_corrupt_not_overwritten();
+    test_date_add_days();
 
     printf("%s: %d checks, %d failures\n",
            g_failures == 0 ? "PASS" : "FAIL", g_checks, g_failures);

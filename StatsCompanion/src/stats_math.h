@@ -8,6 +8,7 @@ long ffs_count_words(const char *text);
 
 /* Calendar helpers. ffs_date_from_ts uses the local timezone. */
 void ffs_date_from_ts(long ts, char out[11]);
+void ffs_date_add_days(char date[11], int delta); /* civil days, DST-safe */
 long ffs_day_number(const char date[11]); /* serial day for comparisons */
 
 /* Consecutive-day streak ending today; a day with no entry yet today still
@@ -16,6 +17,9 @@ int ffs_streak(const FfsStats *s, long now_ts);
 
 /* Words per minute of dictation. Returns 0 when duration is unknown. */
 double ffs_wpm(long words, double seconds);
+
+/* All-time dictation WPM using words that had a known duration. */
+double ffs_all_time_wpm(const FfsStats *s);
 
 /* WPM over the recent-event ring (events with known duration only).
  * Sets *covered to the number of events used. */

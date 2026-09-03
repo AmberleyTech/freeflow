@@ -17,6 +17,25 @@ static int safe_filename(const char *name) {
     return 1;
 }
 
+static int already_seen(const FfsStats *st, long pk) {
+    for (int i = 0; i < st->seen_pk_len; i++) {
+        if (st->seen_pk[i] == pk)
+            return 1;
+    }
+    return 0;
+}
+
+static void remember_pk(FfsStats *st, long pk) {
+    if (already_seen(st, pk))
+        return;
+    if (st->seen_pk_len == FFS_SEEN_PKS) {
+        memmove(st->seen_pk, st->seen_pk + 1,
+                sizeof(long) * (FFS_SEEN_PKS - 1));
+        st->seen_pk_len--;
+    }
+    st->seen_pk[st->seen_pk_len++] = pk;
+}
+
 int ffs_ingest(FfsStats *st, const char *db_path, const char *audio_dir,
                long *added) {
     char found_db[1024];
@@ -45,25 +64,38 @@ int ffs_ingest(FfsStats *st, const char *db_path, const char *audio_dir,
     long max_pk = ffs_db_max_pk(db);
     if (max_pk >= 0 && st->watermark > 0 && max_pk < st->watermark) {
         st->watermark = 0;
+        st->seen_pk_len = 0;
         rebuilt = 1;
     }
 
+    /* Legacy stores only had a watermark. Treat those PKs as already counted
+     * so an upgrade does not double-count the live window. */
+    int legacy = (!rebuilt && st->seen_pk_len == 0 && st->watermark > 0);
+
     long high_water = st->watermark;
-    int rc = ffs_db_begin(db, st->watermark);
+    /* Always scan the live window (FreeFlow keeps <= 20 rows). Dedup via
+     * seen_pk so an empty first write can still be counted on retry. */
+    int rc = ffs_db_begin(db, 0);
     if (rc == 0) {
         FfsHistoryRow row;
         while ((rc = ffs_db_next(db, &row)) == 1) {
-            if (row.pk > high_water)
-                high_water = row.pk;
             if (row.unix_ts <= 0)
                 continue;
             if (rebuilt && st->last_ts > 0 && row.unix_ts <= st->last_ts)
                 continue; /* already counted before the rebuild */
+            if (already_seen(st, row.pk))
+                continue;
+            if (legacy && row.pk <= st->watermark) {
+                remember_pk(st, row.pk);
+                if (row.pk > high_water)
+                    high_water = row.pk;
+                continue;
+            }
 
             const char *text = (row.post && row.post[0]) ? row.post : row.raw;
             long words = ffs_count_words(text);
             if (words == 0)
-                continue; /* empty / failed transcription */
+                continue; /* empty / failed: do not remember, retry can count */
 
             double seconds = -1.0;
             if (audio_dir && audio_dir[0] && safe_filename(row.audio)) {
@@ -73,6 +105,9 @@ int ffs_ingest(FfsStats *st, const char *db_path, const char *audio_dir,
                 seconds = ffs_wav_duration(wav_path);
             }
             ffs_stats_add_event(st, row.unix_ts, words, seconds);
+            remember_pk(st, row.pk);
+            if (row.pk > high_water)
+                high_water = row.pk;
             (*added)++;
         }
     }

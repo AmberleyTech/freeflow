@@ -19,6 +19,8 @@
 	</array>
 	<key>StartInterval</key>
 	<integer>300</integer>
+	<key>ThrottleInterval</key>
+	<integer>2</integer>
 	<key>RunAtLoad</key>
 	<false/>
 	<key>ProcessType</key>

@@ -93,25 +93,49 @@ struct StatsSettingsView: View {
     }
 
     private func reload() {
-        refreshSidecar()
-        snapshot = SidecarStats.load(from: supportDir.appendingPathComponent("stats.json"))
-        checked = true
+        let dir = supportDir
+        DispatchQueue.global(qos: .userInitiated).async {
+            Self.runSidecar(in: dir)
+            let snap = SidecarStats.load(from: dir.appendingPathComponent("stats.json"))
+            DispatchQueue.main.async {
+                snapshot = snap
+                checked = true
+            }
+        }
     }
 
     private func openPage() {
-        refreshSidecar()
-        NSWorkspace.shared.open(supportDir.appendingPathComponent("stats.html"))
+        let dir = supportDir
+        DispatchQueue.global(qos: .userInitiated).async {
+            Self.runSidecar(in: dir)
+            DispatchQueue.main.async {
+                NSWorkspace.shared.open(dir.appendingPathComponent("stats.html"))
+            }
+        }
     }
 
     /// Best-effort: ask the sidecar to ingest the latest history before
-    /// reading/opening. The binary finishes in milliseconds and exits.
-    private func refreshSidecar() {
+    /// reading/opening. Bounded so a stuck binary cannot freeze Settings.
+    /// The launchd agent remains the source of truth between dictations.
+    private static func runSidecar(in supportDir: URL) {
         let bin = supportDir.appendingPathComponent("bin/freeflow-stats")
         guard FileManager.default.isExecutableFile(atPath: bin.path) else { return }
         let task = Process()
         task.executableURL = bin
-        try? task.run()
-        task.waitUntilExit()
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+        } catch {
+            return
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while task.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if task.isRunning {
+            task.terminate()
+        }
     }
 
     private static func humanize(_ seconds: Double) -> String {
@@ -143,6 +167,12 @@ private struct SidecarStats {
         else { return nil }
 
         let typingWPM = (root["tw"] as? NSNumber)?.doubleValue ?? 40
+        let audioWords: Int = {
+            if totals.count >= 6, let aw = (totals[5] as? NSNumber)?.intValue, aw > 0 {
+                return aw
+            }
+            return words
+        }()
 
         var activeDays: Set<String> = []
         if let days = root["d"] as? [Any] {
@@ -170,7 +200,7 @@ private struct SidecarStats {
             day = previous
         }
 
-        let wpm = seconds > 0 ? Double(words) / (seconds / 60) : 0
+        let wpm = seconds > 0 ? Double(audioWords) / (seconds / 60) : 0
         let typingSeconds = typingWPM > 0 ? Double(words) / typingWPM * 60 : 0
         return SidecarStats(
             transcriptions: count,

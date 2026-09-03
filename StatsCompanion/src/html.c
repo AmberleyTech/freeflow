@@ -65,7 +65,7 @@ int ffs_html_write(const FfsStats *s, const char *path, long now_ts) {
     int streak = ffs_streak(s, now_ts);
     int covered = 0;
     double recent_wpm = ffs_recent_wpm(s, &covered);
-    double all_wpm = ffs_wpm(s->total_words, s->total_seconds);
+    double all_wpm = ffs_all_time_wpm(s);
     double saved = ffs_time_saved_seconds(s);
     char saved_h[32], updated[32], since[32], total_audio[32];
     human_duration(saved, saved_h, sizeof(saved_h));
@@ -117,8 +117,11 @@ int ffs_html_write(const FfsStats *s, const char *path, long now_ts) {
     long words_by_day[14];
     char labels[14][11];
     long max_words = 1;
+    char cursor[11];
+    ffs_date_from_ts(now_ts, cursor);
+    ffs_date_add_days(cursor, -13);
     for (int i = 0; i < 14; i++) {
-        ffs_date_from_ts(now_ts - (long)(13 - i) * 86400, labels[i]);
+        memcpy(labels[i], cursor, sizeof(labels[i]));
         words_by_day[i] = 0;
         for (int d = 0; d < s->day_count; d++) {
             if (strcmp(s->days[d].date, labels[i]) == 0) {
@@ -128,6 +131,7 @@ int ffs_html_write(const FfsStats *s, const char *path, long now_ts) {
         }
         if (words_by_day[i] > max_words)
             max_words = words_by_day[i];
+        ffs_date_add_days(cursor, 1);
     }
     const int w = 640, h = 140, top = 10, bottom = 22, bar_zone = h - top - bottom;
     fprintf(f, "<svg viewBox=\"0 0 %d %d\" width=\"100%%\" role=\"img\" "

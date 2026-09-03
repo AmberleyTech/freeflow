@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 long ffs_count_words(const char *text) {
@@ -25,6 +26,22 @@ void ffs_date_from_ts(long ts, char out[11]) {
     struct tm tmv;
     localtime_r(&t, &tmv);
     strftime(out, 11, "%Y-%m-%d", &tmv);
+}
+
+void ffs_date_add_days(char date[11], int delta) {
+    struct tm tmv;
+    int y = 0, m = 0, d = 0;
+    memset(&tmv, 0, sizeof(tmv));
+    if (sscanf(date, "%d-%d-%d", &y, &m, &d) != 3)
+        return;
+    tmv.tm_year = y - 1900;
+    tmv.tm_mon = m - 1;
+    tmv.tm_mday = d + delta;
+    tmv.tm_hour = 12; /* midday: avoid DST midnight edges */
+    tmv.tm_isdst = -1;
+    if (mktime(&tmv) == (time_t)-1)
+        return;
+    strftime(date, 11, "%Y-%m-%d", &tmv);
 }
 
 /* Days since 1970-01-01 from a civil date (Howard Hinnant's algorithm). */
@@ -78,6 +95,11 @@ double ffs_wpm(long words, double seconds) {
     if (seconds <= 0.0)
         return 0.0;
     return (double)words / (seconds / 60.0);
+}
+
+double ffs_all_time_wpm(const FfsStats *s) {
+    long words = s->audio_words > 0 ? s->audio_words : s->total_words;
+    return ffs_wpm(words, s->total_seconds);
 }
 
 double ffs_recent_wpm(const FfsStats *s, int *covered) {
