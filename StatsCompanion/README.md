@@ -4,9 +4,18 @@ A tiny, local-only companion that turns your FreeFlow dictation history into
 personal stats: words per minute, day streaks, total transcriptions, total
 words, and time saved vs typing.
 
-It is a **sidecar**: FreeFlow itself stays 100% upstream and untouched, its
-in-app updater keeps working, and no custom FreeFlow build or DMG is ever
-needed.
+It is a **sidecar**: the collector lives in `StatsCompanion/`, writes only
+under `~/Library/Application Support/FreeFlowStats/`, and never patches the
+`FreeFlow.app` bundle, signing, or release jobs. FreeFlow's in-app updater
+still reads **upstream** releases (`zachlatta/freeflow`). Replacing
+`FreeFlow.app` with an official DMG does not remove the agent, the stats
+data, or the viewer app.
+
+A **Stats** tab inside FreeFlow is an optional fork-only convenience. It is
+compiled from a few additive Swift files; an upstream DMG update will drop
+that tab until you rebuild the fork, while the sidecar keeps running. Merge
+`upstream/main` into this branch when you want the tab and the latest
+FreeFlow together — the Swift touch points are small.
 
 ## Getting the code
 
@@ -106,13 +115,13 @@ Two things to know about the fork build:
 
 - macOS treats the locally built app as a different program, so it will ask
   again for Microphone / Accessibility / Screen Recording permission.
-- The fork's in-app updater reads releases from your fork
-  (amberleytech/freeflow), not upstream — an upstream release would
-  silently remove the Stats tab. Until you publish signed fork releases,
-  update manually: `git remote add upstream https://github.com/zachlatta/freeflow`
-  (once), then `git fetch upstream && git merge upstream/main` and rebuild.
-  The fork touches only four small spots in FreeFlow, so merges are
-  normally clean. The sidecar and your stats data are unaffected either way.
+- The in-app updater still points at **upstream** (`zachlatta/freeflow`).
+  Installing an official release replaces the fork binary and therefore
+  removes the Stats tab; the launchd sidecar and `~/Library/Application
+  Support/FreeFlowStats` are untouched. To keep the tab, merge
+  `upstream/main` into this branch and rebuild:
+  `git remote add upstream https://github.com/zachlatta/freeflow` (once),
+  then `git fetch upstream && git merge upstream/main`.
 
 Remove with `make uninstall` (the agent and plist are removed; your stats
 stay until you delete `~/Library/Application Support/FreeFlowStats`).
@@ -120,9 +129,8 @@ stay until you delete `~/Library/Application Support/FreeFlowStats`).
 ## Why it never conflicts with FreeFlow updates
 
 FreeFlow's updater replaces the whole `FreeFlow.app` bundle with upstream
-releases. The sidecar never touches that bundle, FreeFlow's source tree, its
-build, or its workflows — it only **reads** two things FreeFlow already
-writes locally:
+releases. The sidecar never touches that bundle, FreeFlow's build, or its
+workflows — it only **reads** two things FreeFlow already writes locally:
 
 - `~/Library/Application Support/FreeFlow/PipelineHistory.sqlite`
   (FreeFlow's own history, already capped at the last 20 transcriptions)
@@ -193,8 +201,9 @@ transcripts exist locally.
   fires on every database write, the sidecar normally sees each entry before
   it rotates out — but a burst of more than 20 dictations while you are
   logged out or the Mac is asleep could drop the oldest before ingestion.
-- FreeFlow's retry feature updates history rows in place; a retried
-  transcription counts once, with its first word count.
+- FreeFlow's retry feature updates history rows in place. An empty first
+  write is not counted; a later retry with text is. A retry that only
+  changes wording of an already-counted row keeps the first word count.
 - No menu-bar icon — the deliberate price of the sub-10 MB RAM budget. The
   browser page and terminal summary are the UI.
 - The launchd agent is macOS-only; the engine itself is portable C99 and its
