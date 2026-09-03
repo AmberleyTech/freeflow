@@ -32,6 +32,12 @@ jobs:
       - name: Run repository checks
         run: make check
 
+      - name: Run StatsCompanion checks
+        run: |
+          make -C StatsCompanion check
+          make -C StatsCompanion memcheck
+          make -C StatsCompanion diskcheck
+
       - name: Check changed files for whitespace errors
         if: github.event_name == 'pull_request'
         run: git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"

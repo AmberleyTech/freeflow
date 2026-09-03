@@ -452,6 +452,8 @@ struct SettingsView: View {
                     VoiceMacrosSettingsView()
                 case .runLog:
                     RunLogView()
+                case .stats:
+                    StatsSettingsView()
                 case .debug:
                     DebugSettingsView()
                 }

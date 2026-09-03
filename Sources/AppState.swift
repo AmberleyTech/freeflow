@@ -25,6 +25,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case prompts
     case macros
     case runLog
+    case stats
     case debug
 
     var id: String { rawValue }
@@ -41,6 +42,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .prompts: return "Prompts"
         case .macros: return "Voice Macros"
         case .runLog: return "Run Log"
+        case .stats: return "Stats"
         case .debug: return "Debug"
         }
     }
@@ -51,6 +53,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .prompts: return "text.bubble"
         case .macros: return "music.mic"
         case .runLog: return "clock.arrow.circlepath"
+        case .stats: return "chart.bar"
         case .debug: return "wrench.and.screwdriver"
         }
     }

@@ -347,6 +347,11 @@ struct MenuBarView: View {
                 NotificationCenter.default.post(name: .showSetup, object: nil)
             }
 
+            Button("Stats") {
+                appState.selectedSettingsTab = .stats
+                NotificationCenter.default.post(name: .showSettings, object: nil)
+            }
+
             Button("Settings") {
                 NotificationCenter.default.post(name: .showSettings, object: nil)
             }
